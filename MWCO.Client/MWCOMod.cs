@@ -11,17 +11,25 @@ namespace MWCO.Client
     /// </summary>
     public class MWCOMod
     {
-        public static string ModVersion = "0.1.0";
+        public static string ModVersion = "0.1.1";
         public static string HarmonyId = "com.mwco.multiplayer";
 
         private static GameObject networkManagerObject;
         private static Harmony harmony;
+        private static bool initialized = false;
 
         /// <summary>
         /// Called when mod is loaded
         /// </summary>
         public static void Initialize()
         {
+            if (initialized)
+            {
+                Debug.Log("[MWCO] Already initialized, skipping");
+                return;
+            }
+            initialized = true;
+
             try
             {
                 Debug.Log($"[MWCO] Initializing My Winter Car Online v{ModVersion}");
@@ -33,8 +41,14 @@ namespace MWCO.Client
 
                 // Create NetworkManager GameObject
                 networkManagerObject = new GameObject("MWCO_NetworkManager");
+                Debug.Log("[MWCO] GameObject created");
+                
                 networkManagerObject.AddComponent<NetworkManager>();
+                Debug.Log("[MWCO] NetworkManager component added");
+                
                 networkManagerObject.AddComponent<UI.ConnectionUI>();
+                Debug.Log("[MWCO] ConnectionUI component added");
+                
                 UnityEngine.Object.DontDestroyOnLoad(networkManagerObject);
 
                 Debug.Log("[MWCO] NetworkManager created");

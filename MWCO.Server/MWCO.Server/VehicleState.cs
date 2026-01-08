@@ -91,28 +91,6 @@ public class VehicleState
             Brake = Brake
         };
     }
-
-    // Simple physics integration (basic prediction)
-    public void Integrate(float deltaTime)
-    {
-        // Update position based on velocity
-        Position += Velocity * deltaTime;
-
-        // Apply basic drag
-        Velocity *= (1.0f - 0.01f * deltaTime);
-
-        // Rotate based on angular velocity
-        float angleChange = AngularVelocity.Length() * deltaTime;
-        if (angleChange > 0.001f)
-        {
-            Vector3 axis = Vector3.Normalize(AngularVelocity);
-            Quaternion deltaRot = Quaternion.CreateFromAxisAngle(axis, angleChange);
-            Rotation = Quaternion.Normalize(Quaternion.Multiply(Rotation, deltaRot));
-        }
-
-        // Apply angular drag
-        AngularVelocity *= (1.0f - 0.1f * deltaTime);
-    }
 }
 
 public struct WheelData

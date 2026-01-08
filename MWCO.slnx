@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/MWCO.Server/">
-    <Project Path="MWCO.Server/MWCO.Server/MWCO.Server.csproj" />
-  </Folder>
-  <Project Path="MWCO.Client/MWCO.Client.csproj" />
-  <Project Path="MWCO.Launcher/MWCO.Launcher.csproj" />
-  <Project Path="MWCO.Shared/MWCO.Shared.csproj" />
-</Solution>

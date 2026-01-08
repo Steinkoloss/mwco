@@ -1,6 +1,8 @@
 # Build outputs
 bin/
 obj/
+build/
+dist/
 *.dll
 *.exe
 *.pdb
@@ -27,6 +29,10 @@ Thumbs.db
 # Dependencies
 packages/
 node_modules/
+
+# Test files
+TestConnection/
+MWCO.Tests/
 
 # But keep example configs
 !*.example.*

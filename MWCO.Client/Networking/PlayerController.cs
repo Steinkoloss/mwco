@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using MWCO.Shared;
 using MWCO.Shared.Packets;
@@ -18,6 +19,7 @@ namespace MWCO.Client.Networking
         private Vector3 lastPosition;
         private Quaternion lastRotation;
         private float sendTimer = 0f;
+        private int sendCount = 0;
         private const float SEND_INTERVAL = 0.02f; // 50Hz
 
         // Player identification
@@ -27,9 +29,84 @@ namespace MWCO.Client.Networking
         {
             playerName = name;
             networkManager = NetworkManager.Instance;
+            
+            Debug.Log($"[MWCO] ========================================");
+            Debug.Log($"[MWCO] PlayerController.Initialize() called!");
+            Debug.Log($"[MWCO] Player name: {name}");
+            Debug.Log($"[MWCO] NetworkManager.Instance: {(networkManager != null ? "OK" : "NULL")}");
+            Debug.Log($"[MWCO] ========================================");
 
-            // Find player GameObject - typically named "PLAYER" or "FPSController"
-            GameObject playerObj = GameObject.Find("PLAYER") ?? GameObject.Find("FPSController");
+            // First, try to find a CharacterController - this is the actual player physics object
+            var characterController = GameObject.FindObjectOfType<CharacterController>();
+            if (characterController != null)
+            {
+                Debug.Log($"[MWCO] Found CharacterController on: {characterController.gameObject.name}");
+                playerTransform = characterController.transform;
+                lastPosition = playerTransform.position;
+                lastRotation = playerTransform.rotation;
+                Debug.Log($"[MWCO] Using CharacterController for player position: {lastPosition}");
+                SendPlayerState();
+                return;
+            }
+
+            // Try multiple common player object names
+            string[] playerObjectNames = new string[]
+            {
+                "PLAYER",
+                "Player",
+                "FPSController",
+                "FPSPlayer",
+                "Character",
+                "PlayerCharacter",
+                "PlayerController"
+            };
+
+            GameObject playerObj = null;
+            foreach (var objName in playerObjectNames)
+            {
+                playerObj = GameObject.Find(objName);
+                if (playerObj != null)
+                {
+                    Debug.Log($"[MWCO] Found player object: {objName}");
+                    break;
+                }
+            }
+
+            // Fallback: use camera's parent or camera itself
+            if (playerObj == null)
+            {
+                Debug.Log($"[MWCO] No named player object found. Camera.main = {(Camera.main != null ? Camera.main.name : "NULL")}");
+                
+                if (Camera.main != null)
+                {
+                    // Log the camera hierarchy
+                    Debug.Log($"[MWCO] Camera hierarchy:");
+                    var t = Camera.main.transform;
+                    while (t != null)
+                    {
+                        Debug.Log($"[MWCO]   {t.name} at {t.position}");
+                        t = t.parent;
+                    }
+                    
+                    // Try camera's parent first (often the player)
+                    if (Camera.main.transform.parent != null)
+                    {
+                        playerObj = Camera.main.transform.parent.gameObject;
+                        Debug.Log($"[MWCO] Using camera parent as player: {playerObj.name}");
+                    }
+                    else
+                    {
+                        playerObj = Camera.main.gameObject;
+                        Debug.Log($"[MWCO] Using main camera as player position source");
+                    }
+                }
+                else
+                {
+                    // Camera.main is null - use THIS object as transform source
+                    Debug.LogWarning("[MWCO] Camera.main is NULL! Using NetworkManager transform as fallback.");
+                    playerObj = this.gameObject;
+                }
+            }
 
             if (playerObj != null)
             {
@@ -39,61 +116,135 @@ namespace MWCO.Client.Networking
                 lastPosition = playerTransform.position;
                 lastRotation = playerTransform.rotation;
 
-                Debug.Log($"[MWCO] PlayerController initialized for {playerName}");
+                Debug.Log($"[MWCO] PlayerController initialized for {playerName} using {playerObj.name}");
+                Debug.Log($"[MWCO] Initial player position: {lastPosition}");
+                
+                // Send first PlayerState immediately!
+                Debug.Log($"[MWCO] Sending INITIAL PlayerState packet...");
+                SendPlayerState();
             }
             else
             {
-                Debug.LogError("[MWCO] Could not find player GameObject!");
+                Debug.LogError("[MWCO] Could not find player GameObject! Will retry in Update...");
             }
         }
 
         void Update()
         {
-            if (playerTransform == null || networkManager == null || !networkManager.IsConnected)
+            if (networkManager == null || !networkManager.IsConnected)
+            {
                 return;
+            }
 
+            // Simple: just send camera position at 50Hz
             sendTimer += Time.deltaTime;
 
             if (sendTimer >= SEND_INTERVAL)
             {
-                SendPlayerState();
                 sendTimer = 0f;
+                SendPlayerState();
+            }
+        }
+        
+        private int updateCount = 0;
+
+        private void TryFindPlayer()
+        {
+            retryCount++;
+            
+            // Log every 50 attempts (1 second at 50Hz)
+            bool shouldLog = retryCount % 50 == 0;
+            
+            // First, try to find a CharacterController
+            var characterController = GameObject.FindObjectOfType<CharacterController>();
+            if (characterController != null)
+            {
+                playerTransform = characterController.transform;
+                lastPosition = playerTransform.position;
+                lastRotation = playerTransform.rotation;
+                Debug.Log($"[MWCO] Found CharacterController on: {characterController.gameObject.name} at {lastPosition}");
+                return;
+            }
+            
+            // Try camera as fallback
+            if (Camera.main != null)
+            {
+                if (Camera.main.transform.parent != null)
+                {
+                    playerTransform = Camera.main.transform.parent;
+                    Debug.Log($"[MWCO] Found player via camera parent: {playerTransform.name}");
+                }
+                else
+                {
+                    playerTransform = Camera.main.transform;
+                    Debug.Log($"[MWCO] Using camera transform for player position");
+                }
+                lastPosition = playerTransform.position;
+                lastRotation = playerTransform.rotation;
+                Debug.Log($"[MWCO] Player position: {lastPosition}");
+            }
+            else if (shouldLog)
+            {
+                Debug.LogWarning($"[MWCO] Camera.main is NULL! Cannot find player. Attempt {retryCount}");
+                
+                // List all cameras as fallback
+                var cameras = Camera.allCameras;
+                Debug.Log($"[MWCO] Found {cameras.Length} cameras in scene");
+                foreach (var cam in cameras)
+                {
+                    Debug.Log($"[MWCO] Camera: {cam.name}, tag: {cam.tag}, enabled: {cam.enabled}");
+                }
             }
         }
 
+        private int retryCount = 0;
+
         private void SendPlayerState()
         {
-            // Check if position/rotation changed significantly
-            if (Vector3.Distance(playerTransform.position, lastPosition) > 0.01f ||
-                Quaternion.Angle(playerTransform.rotation, lastRotation) > 0.5f)
+            // SIMPLE: Just use camera position directly
+            if (Camera.main == null)
+            {
+                if (sendCount % 50 == 0)
+                    Debug.LogWarning("[MWCO] PlayerController: Camera.main is NULL!");
+                return;
+            }
+
+            try
             {
                 PlayerStatePacket packet = new PlayerStatePacket(
                     networkManager.LocalPlayerId,
                     networkManager.CurrentTick
                 );
 
-                packet.PositionX = playerTransform.position.x;
-                packet.PositionY = playerTransform.position.y;
-                packet.PositionZ = playerTransform.position.z;
+                // Use camera position directly
+                Vector3 camPos = Camera.main.transform.position;
+                Quaternion camRot = Camera.main.transform.rotation;
 
-                packet.RotationX = playerTransform.rotation.x;
-                packet.RotationY = playerTransform.rotation.y;
-                packet.RotationZ = playerTransform.rotation.z;
-                packet.RotationW = playerTransform.rotation.w;
+                packet.PositionX = camPos.x;
+                packet.PositionY = camPos.y;
+                packet.PositionZ = camPos.z;
 
-                // Detect animation states from velocity/input
-                Rigidbody rb = playerTransform.GetComponent<Rigidbody>();
-                if (rb != null)
+                packet.RotationX = camRot.x;
+                packet.RotationY = camRot.y;
+                packet.RotationZ = camRot.z;
+                packet.RotationW = camRot.w;
+
+                // Log BEFORE sending
+                sendCount++;
+                if (sendCount <= 10 || sendCount % 50 == 0)
                 {
-                    float speed = rb.velocity.magnitude;
-                    packet.IsWalking = (byte)(speed > 0.1f && speed < 3f ? 1 : 0);
-                    packet.IsRunning = (byte)(speed >= 3f ? 1 : 0);
+                    Debug.Log($"[MWCO] >>> SENDING PlayerState #{sendCount}: pos=({camPos.x:F1}, {camPos.y:F1}, {camPos.z:F1})");
                 }
 
-                networkManager.SendPacket(packet);
+                // Use ToBytes() directly for reliable serialization
+                networkManager.SendPacket(packet.ToBytes());
 
-                lastPosition = playerTransform.position;
-                lastRotation = playerTransform.rotation;
+                lastPosition = camPos;
+                lastRotation = camRot;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[MWCO] Exception in SendPlayerState: {ex.Message}\n{ex.StackTrace}");
             }
         }
 

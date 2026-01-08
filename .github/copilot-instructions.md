@@ -28,9 +28,10 @@ Packets use `[StructLayout(LayoutKind.Sequential, Pack = 1)]` for binary seriali
 ## Critical Workflows
 
 ### Building Distribution
-```bash
-python build.py  # Creates mwco-server.exe and mwco-mod.zip
-```
+Use dotnet to build server and client projects
+relevant paths: 
+C:\Program Files (x86)\Steam\steamapps\common\My Winter Car
+C:\Program Files (x86)\Steam\steamapps\common\My Winter Car 2
 
 ### Running Server
 ```bash

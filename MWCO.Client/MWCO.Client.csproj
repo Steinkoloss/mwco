@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
+    <TargetFramework>net461</TargetFramework>
     <LangVersion>10</LangVersion>
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -12,17 +12,24 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Unity Engine DLLs from My Winter Car -->
-    <Reference Include="UnityEngine">
-      <HintPath>/home/dryskidda/.local/share/Steam/steamapps/common/My Winter Car/mywintercar_Data/Managed/UnityEngine.dll</HintPath>
+    <!-- Try to find Unity Engine DLLs - support multiple installation paths -->
+    <!-- Windows Steam paths -->
+    <Reference Include="UnityEngine" Condition="Exists('C:\Program Files (x86)\Steam\steamapps\common\My Winter Car\mywintercar_Data\Managed\UnityEngine.dll')">
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\My Winter Car\mywintercar_Data\Managed\UnityEngine.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>/home/dryskidda/.local/share/Steam/steamapps/common/My Winter Car/mywintercar_Data/Managed/Assembly-CSharp.dll</HintPath>
+    <Reference Include="Assembly-CSharp" Condition="Exists('C:\Program Files (x86)\Steam\steamapps\common\My Winter Car\mywintercar_Data\Managed\Assembly-CSharp.dll')">
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\My Winter Car\mywintercar_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="PlayMaker">
-      <HintPath>/home/dryskidda/.local/share/Steam/steamapps/common/My Winter Car/mywintercar_Data/Managed/PlayMaker.dll</HintPath>
+    <Reference Include="PlayMaker" Condition="Exists('C:\Program Files (x86)\Steam\steamapps\common\My Winter Car\mywintercar_Data\Managed\PlayMaker.dll')">
+      <HintPath>C:\Program Files (x86)\Steam\steamapps\common\My Winter Car\mywintercar_Data\Managed\PlayMaker.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+
+    <!-- BepInEx core - copy from game install into ../lib/BepInEx.dll if not present -->
+    <Reference Include="BepInEx" Condition="Exists('../lib/BepInEx.dll')">
+      <HintPath>../lib/BepInEx.dll</HintPath>
       <Private>False</Private>
     </Reference>
 

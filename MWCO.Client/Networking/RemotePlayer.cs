@@ -34,23 +34,35 @@ namespace MWCO.Client.Networking
 
         private void CreatePlayerModel()
         {
-            // Create a simple capsule for now (placeholder)
-            playerModel = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            // Create a purple box representing the player body (0.7m x 0.7m x 2m)
+            // Positioned so the top is at camera height (eye level) and extends down
+            playerModel = GameObject.CreatePrimitive(PrimitiveType.Cube);
             playerModel.name = $"RemotePlayer_{PlayerId}_{PlayerName}";
             playerModel.transform.SetParent(transform);
-            playerModel.transform.localPosition = Vector3.zero;
+            playerModel.transform.localPosition = new Vector3(0, -1f, 0); // Offset down by 1m (half the height)
+            playerModel.transform.localScale = new Vector3(0.7f, 2f, 0.7f); // 0.7m wide, 2m tall, 0.7m deep
 
-            // Make it purple to distinguish from local player
+            // Make it PURPLE
             var renderer = playerModel.GetComponent<Renderer>();
             if (renderer != null)
             {
-                renderer.material.color = new Color(0.7f, 0.3f, 0.9f); // Purple
+                renderer.material = new Material(Shader.Find("Standard"));
+                renderer.material.color = new Color(0.6f, 0f, 0.8f); // Purple
+                renderer.material.SetFloat("_Metallic", 0f);
+                renderer.material.SetFloat("_Glossiness", 0.3f);
             }
+
+            // Remove collider so it doesn't interfere with physics
+            var collider = playerModel.GetComponent<Collider>();
+            if (collider != null)
+                Destroy(collider);
 
             // Add name tag above player
             CreateNameTag();
 
             playerTransform = playerModel.transform;
+            
+            Debug.Log($"[MWCO] Created PURPLE BOX visual for remote player {PlayerId} at {transform.position}");
         }
 
         private void CreateNameTag()

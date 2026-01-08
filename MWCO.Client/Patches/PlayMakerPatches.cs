@@ -19,7 +19,7 @@ namespace MWCO.Client.Patches
         [HarmonyPrefix]
         public static void Event_Prefix(Fsm __instance, FsmEvent fsmEvent)
         {
-            if (!NetworkManager.Instance.IsConnected)
+            if (NetworkManager.Instance == null || !NetworkManager.Instance.IsConnected)
                 return;
 
             // Check if this is a relevant event we need to sync
@@ -42,7 +42,7 @@ namespace MWCO.Client.Patches
         [HarmonyPrefix]
         public static void FsmBool_Set_Prefix(FsmBool __instance, bool value)
         {
-            if (!NetworkManager.Instance.IsConnected)
+            if (NetworkManager.Instance == null || !NetworkManager.Instance.IsConnected)
                 return;
 
             // Track boolean variables that indicate part states
@@ -84,7 +84,7 @@ namespace MWCO.Client.Patches
         [HarmonyPrefix]
         public static void FsmFloat_Set_Prefix(FsmFloat __instance, float value)
         {
-            if (!NetworkManager.Instance.IsConnected)
+            if (NetworkManager.Instance == null || !NetworkManager.Instance.IsConnected)
                 return;
 
             // Track float variables (damage, wear, fluid levels, etc.)

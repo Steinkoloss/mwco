@@ -68,6 +68,57 @@ namespace MWCO.Client.Networking
 
             Debug.Log($"[MWCO] Remote vehicle {VehicleId} initialized");
         }
+        
+        public void InitializeFromState(VehicleStatePacket statePacket)
+        {
+            VehicleId = statePacket.VehicleId;
+            OwnerId = 0; // Unknown owner when auto-spawning
+
+            // Set initial position
+            currentPosition = new Vector3(statePacket.PositionX, statePacket.PositionY, statePacket.PositionZ);
+            currentRotation = new Quaternion(statePacket.RotationX, statePacket.RotationY, statePacket.RotationZ, statePacket.RotationW);
+            transform.position = currentPosition;
+            transform.rotation = currentRotation;
+
+            currentRPM = statePacket.RPM;
+            currentGear = statePacket.Gear;
+
+            // Create visual representation - use a LARGE BRIGHT visual for testing
+            CreateTestVisuals();
+
+            Debug.Log($"[MWCO] Remote vehicle {VehicleId} auto-initialized from state at {currentPosition}");
+        }
+        
+        private void CreateTestVisuals()
+        {
+            // Create a LARGE, BRIGHT cube so it's impossible to miss
+            vehicleModel = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            vehicleModel.transform.parent = transform;
+            vehicleModel.transform.localPosition = Vector3.up * 2f; // 2m above ground
+            vehicleModel.transform.localScale = new Vector3(4f, 4f, 4f); // 4m cube
+
+            // Remove collider
+            var collider = vehicleModel.GetComponent<Collider>();
+            if (collider != null)
+            {
+                Destroy(collider);
+            }
+
+            // Set bright RED color - unmissable
+            var renderer = vehicleModel.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                var shader = Shader.Find("Unlit/Color");
+                if (shader == null) shader = Shader.Find("Standard");
+                if (shader != null)
+                {
+                    renderer.material = new Material(shader);
+                    renderer.material.color = Color.red; // BRIGHT RED
+                }
+            }
+
+            Debug.Log($"[MWCO] Created TEST visuals (RED 4m cube) for remote vehicle {VehicleId}");
+        }
 
         private void CreateVisuals(string modelName)
         {
@@ -129,6 +180,12 @@ namespace MWCO.Client.Networking
 
         public void UpdateState(VehicleStatePacket packet)
         {
+            // Verbose logging removed - enable for debugging
+            // if (Time.frameCount % 300 == 0)
+            // {
+            //     Debug.Log($"[MWCO] RemoteVehicle {VehicleId} received state: pos=({packet.PositionX:F1}, {packet.PositionY:F1}, {packet.PositionZ:F1})");
+            // }
+            
             // Add state to buffer
             var snapshot = new StateSnapshot
             {

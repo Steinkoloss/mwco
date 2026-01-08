@@ -36,24 +36,84 @@ public struct PlayerStatePacket
         IsWalking = IsRunning = IsCrouching = IsInVehicle = 0;
     }
 
-    public static PlayerStatePacket FromBytes(byte[] data)
+    public static PlayerStatePacket FromBytes(byte[] bytes, int startOffset = 0)
     {
-        int size = Marshal.SizeOf(typeof(PlayerStatePacket));
-        IntPtr ptr = Marshal.AllocHGlobal(size);
-        Marshal.Copy(data, 0, ptr, Math.Min(size, data.Length));
-        PlayerStatePacket packet = (PlayerStatePacket)Marshal.PtrToStructure(ptr, typeof(PlayerStatePacket));
-        Marshal.FreeHGlobal(ptr);
+        // Expected layout: Header (8) | PlayerId (2) | Tick (4) | Position (12) | Rotation (16) | Anim (4) = 46 bytes
+        const int expectedSize = PacketHeader.Size + 2 + 4 + 12 + 16 + 4;
+        if (bytes.Length - startOffset < expectedSize)
+            throw new ArgumentException($"Buffer too small. Need at least {expectedSize} bytes.");
+
+        var packet = new PlayerStatePacket();
+        int offset = startOffset;
+
+        packet.Header = PacketHeader.FromBytes(bytes, offset);
+        offset += PacketHeader.Size;
+
+        packet.PlayerId = BitConverter.ToUInt16(bytes, offset);
+        offset += 2;
+
+        packet.Tick = BitConverter.ToUInt32(bytes, offset);
+        offset += 4;
+
+        packet.PositionX = BitConverter.ToSingle(bytes, offset);
+        offset += 4;
+        packet.PositionY = BitConverter.ToSingle(bytes, offset);
+        offset += 4;
+        packet.PositionZ = BitConverter.ToSingle(bytes, offset);
+        offset += 4;
+
+        packet.RotationX = BitConverter.ToSingle(bytes, offset);
+        offset += 4;
+        packet.RotationY = BitConverter.ToSingle(bytes, offset);
+        offset += 4;
+        packet.RotationZ = BitConverter.ToSingle(bytes, offset);
+        offset += 4;
+        packet.RotationW = BitConverter.ToSingle(bytes, offset);
+        offset += 4;
+
+        packet.IsWalking = bytes[offset++];
+        packet.IsRunning = bytes[offset++];
+        packet.IsCrouching = bytes[offset++];
+        packet.IsInVehicle = bytes[offset++];
+
         return packet;
     }
 
     public byte[] ToBytes()
     {
-        int size = Marshal.SizeOf(this);
-        byte[] data = new byte[size];
-        IntPtr ptr = Marshal.AllocHGlobal(size);
-        Marshal.StructureToPtr(this, ptr, false);
-        Marshal.Copy(ptr, data, 0, size);
-        Marshal.FreeHGlobal(ptr);
-        return data;
+        byte[] bytes = new byte[PacketHeader.Size + 2 + 4 + 12 + 16 + 4];
+        int offset = 0;
+
+        // Header
+        byte[] headerBytes = Header.ToBytes();
+        Buffer.BlockCopy(headerBytes, 0, bytes, offset, PacketHeader.Size);
+        offset += PacketHeader.Size;
+
+        // PlayerId
+        BitConverter.GetBytes(PlayerId).CopyTo(bytes, offset);
+        offset += 2;
+
+        // Tick
+        BitConverter.GetBytes(Tick).CopyTo(bytes, offset);
+        offset += 4;
+
+        // Position
+        BitConverter.GetBytes(PositionX).CopyTo(bytes, offset); offset += 4;
+        BitConverter.GetBytes(PositionY).CopyTo(bytes, offset); offset += 4;
+        BitConverter.GetBytes(PositionZ).CopyTo(bytes, offset); offset += 4;
+
+        // Rotation
+        BitConverter.GetBytes(RotationX).CopyTo(bytes, offset); offset += 4;
+        BitConverter.GetBytes(RotationY).CopyTo(bytes, offset); offset += 4;
+        BitConverter.GetBytes(RotationZ).CopyTo(bytes, offset); offset += 4;
+        BitConverter.GetBytes(RotationW).CopyTo(bytes, offset); offset += 4;
+
+        // Animation bytes
+        bytes[offset++] = IsWalking;
+        bytes[offset++] = IsRunning;
+        bytes[offset++] = IsCrouching;
+        bytes[offset++] = IsInVehicle;
+
+        return bytes;
     }
 }

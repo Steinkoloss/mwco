@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using MWCO.Shared;
 using MWCO.Shared.Packets;
+using BepInEx.Logging;
 
 namespace MWCO.Client.Networking
 {
@@ -14,7 +15,7 @@ namespace MWCO.Client.Networking
     /// </summary>
     public class NetworkManager : MonoBehaviour
     {
-        // Singleton
+        public static ManualLogSource Logger { get; set; }
         public static NetworkManager Instance { get; private set; }
 
         // Connection state
@@ -22,6 +23,10 @@ namespace MWCO.Client.Networking
         public ushort LocalPlayerId { get; private set; }
         public ushort LocalVehicleId { get; private set; }
         public uint CurrentTick => currentTick;
+        public uint ServerTick { get; private set; }
+        public int PacketsReceived { get; private set; }
+        public int PacketsSent { get; private set; }
+        public string LastError { get; private set; } = "";
 
         // Networking
         private UdpClient udpClient;
@@ -59,22 +64,25 @@ namespace MWCO.Client.Networking
 
             Instance = this;
             DontDestroyOnLoad(gameObject);
-
-            Debug.Log("[MWCO] NetworkManager initialized");
+            LogInfo("[MWCO] NetworkManager initialized");
         }
+
+        // PlayerState timer
+        private float playerStateTimer = 0f;
+        private int playerStateSendCount = 0;
 
         void Start()
         {
-            // Load config
             LoadConfig();
         }
 
         void Update()
         {
+            ReceivePackets();
+
             if (!IsConnected)
                 return;
 
-            // Update timers
             float deltaTime = Time.deltaTime;
             currentTick++;
 
@@ -82,37 +90,65 @@ namespace MWCO.Client.Networking
             mediumPriorityTimer += deltaTime;
             lowPriorityTimer += deltaTime;
             heartbeatTimer += deltaTime;
+            playerStateTimer += deltaTime;
 
-            // High priority updates (50Hz)
             if (highPriorityTimer >= 1.0f / NetworkConfig.HighPriorityUpdateRate)
             {
                 SendHighPriorityUpdates();
                 highPriorityTimer = 0f;
             }
 
-            // Medium priority updates (20Hz)
             if (mediumPriorityTimer >= 1.0f / NetworkConfig.MediumPriorityUpdateRate)
             {
                 SendMediumPriorityUpdates();
                 mediumPriorityTimer = 0f;
             }
 
-            // Low priority updates (5Hz)
             if (lowPriorityTimer >= 1.0f / NetworkConfig.LowPriorityUpdateRate)
             {
                 SendLowPriorityUpdates();
                 lowPriorityTimer = 0f;
             }
 
-            // Heartbeat
             if (heartbeatTimer >= HEARTBEAT_INTERVAL)
             {
                 SendHeartbeat();
                 heartbeatTimer = 0f;
             }
 
-            // Receive packets
-            ReceivePackets();
+            // Send PlayerState directly from NetworkManager at 50Hz
+            if (playerStateTimer >= 0.02f)
+            {
+                SendPlayerStateDirectly();
+                playerStateTimer = 0f;
+            }
+        }
+
+        private void SendPlayerStateDirectly()
+        {
+            if (Camera.main == null)
+                return;
+
+            var packet = new PlayerStatePacket(LocalPlayerId, currentTick);
+            
+            Vector3 camPos = Camera.main.transform.position;
+            Quaternion camRot = Camera.main.transform.rotation;
+
+            packet.PositionX = camPos.x;
+            packet.PositionY = camPos.y;
+            packet.PositionZ = camPos.z;
+            packet.RotationX = camRot.x;
+            packet.RotationY = camRot.y;
+            packet.RotationZ = camRot.z;
+            packet.RotationW = camRot.w;
+
+            playerStateSendCount++;
+            if (playerStateSendCount <= 5 || playerStateSendCount % 250 == 0)
+            {
+                LogInfo($"[MWCO] Sending PlayerState #{playerStateSendCount} at ({camPos.x:F1}, {camPos.y:F1}, {camPos.z:F1})");
+            }
+
+            SendPacket(packet.ToBytes());
         }
 
         void OnDestroy()
@@ -122,15 +158,45 @@ namespace MWCO.Client.Networking
 
         private void LoadConfig()
         {
-            // TODO: Load from config file
+            string configPath = System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
+                "MWCO", "config.txt"
+            );
+
+            try
+            {
+                if (System.IO.File.Exists(configPath))
+                {
+                    var configLines = System.IO.File.ReadAllLines(configPath);
+                    foreach (var line in configLines)
+                    {
+                        if (line.StartsWith("player_name="))
+                        {
+                            string loadedName = line.Substring("player_name=".Length).Trim();
+                            if (!string.IsNullOrEmpty(loadedName) && loadedName.Length <= ConnectionRequestPacket.MaxNameLength)
+                            {
+                                playerName = loadedName;
+                                LogInfo($"[MWCO] Loaded player name: {playerName}");
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogWarning($"[MWCO] Failed to load config: {ex.Message}");
+            }
+
             playerName = SystemInfo.deviceName;
+            LogInfo($"[MWCO] Using device name: {playerName}");
         }
 
         public void Connect(string address = null, int port = 0)
         {
             if (IsConnected)
             {
-                Debug.LogWarning("[MWCO] Already connected!");
+                LogWarning("[MWCO] Already connected!");
                 return;
             }
 
@@ -139,20 +205,24 @@ namespace MWCO.Client.Networking
                 if (address != null) serverAddress = address;
                 if (port > 0) serverPort = port;
 
+                LogInfo($"[MWCO] Connecting to {serverAddress}:{serverPort}");
+                
                 serverEndPoint = new IPEndPoint(IPAddress.Parse(serverAddress), serverPort);
                 udpClient = new UdpClient();
+                udpClient.Client.Blocking = false;
+                udpClient.Connect(serverEndPoint);
 
-                Debug.Log($"[MWCO] Connecting to {serverAddress}:{serverPort}...");
-
-                // Send connection request
                 var request = new ConnectionRequestPacket(playerName, currentTick);
-                SendPacket(request.ToBytes());
-
-                Debug.Log("[MWCO] Connection request sent");
+                byte[] data = request.ToBytes();
+                
+                int sent = udpClient.Send(data, data.Length);
+                PacketsSent++;
+                LogInfo($"[MWCO] Connection request sent ({sent} bytes)");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[MWCO] Connection failed: {ex.Message}");
+                LastError = $"Connection failed: {ex.Message}";
+                LogError($"[MWCO] {LastError}");
             }
         }
 
@@ -163,18 +233,15 @@ namespace MWCO.Client.Networking
 
             try
             {
-                // Send disconnect packet
                 var header = new PacketHeader(PacketType.Disconnect, currentTick);
                 SendPacket(header.ToBytes());
-
                 udpClient?.Close();
                 IsConnected = false;
-
-                Debug.Log("[MWCO] Disconnected from server");
+                LogInfo("[MWCO] Disconnected from server");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[MWCO] Error during disconnect: {ex.Message}");
+                LogError($"[MWCO] Error during disconnect: {ex.Message}");
             }
         }
 
@@ -182,11 +249,18 @@ namespace MWCO.Client.Networking
         {
             try
             {
-                udpClient.Send(data, data.Length, serverEndPoint);
+                if (udpClient == null)
+                {
+                    LastError = "UDP client is null";
+                    return;
+                }
+                
+                udpClient.Send(data, data.Length);
+                PacketsSent++;
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[MWCO] Failed to send packet: {ex.Message}");
+                LastError = $"Send error: {ex.Message}";
             }
         }
 
@@ -204,18 +278,22 @@ namespace MWCO.Client.Networking
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[MWCO] Failed to send packet: {ex.Message}");
+                LogError($"[MWCO] Failed to send packet: {ex.Message}");
             }
         }
 
         private void ReceivePackets()
         {
+            var client = udpClient;
+            if (client == null) return;
+
             try
             {
-                while (udpClient.Available > 0)
+                while (client.Available > 0)
                 {
                     IPEndPoint remoteEndPoint = null;
-                    byte[] data = udpClient.Receive(ref remoteEndPoint);
+                    byte[] data = client.Receive(ref remoteEndPoint);
+                    PacketsReceived++;
 
                     if (data.Length >= PacketHeader.Size)
                     {
@@ -223,9 +301,17 @@ namespace MWCO.Client.Networking
                     }
                 }
             }
+            catch (SocketException se)
+            {
+                if (se.SocketErrorCode != SocketError.WouldBlock &&
+                    se.SocketErrorCode != SocketError.ConnectionReset)
+                {
+                    LastError = $"Socket error: {se.Message}";
+                }
+            }
             catch (Exception ex)
             {
-                Debug.LogError($"[MWCO] Error receiving packets: {ex.Message}");
+                LastError = $"Receive error: {ex.Message}";
             }
         }
 
@@ -240,39 +326,30 @@ namespace MWCO.Client.Networking
                     case PacketType.ConnectionAccepted:
                         HandleConnectionAccepted(data);
                         break;
-
                     case PacketType.ConnectionDenied:
                         HandleConnectionDenied(data);
                         break;
-
                     case PacketType.VehicleStateUpdate:
                         HandleVehicleState(data);
                         break;
-
                     case PacketType.VehicleSpawn:
                         HandleVehicleSpawn(data);
                         break;
-
                     case PacketType.VehicleDespawn:
                         HandleVehicleDespawn(data);
                         break;
-
                     case PacketType.PlayerState:
                         HandlePlayerState(data);
                         break;
-
                     case PacketType.PlayerSpawn:
                         HandlePlayerSpawn(data);
                         break;
-
                     case PacketType.PlayerDespawn:
                         HandlePlayerDespawn(data);
                         break;
-
                     case PacketType.WheelStateUpdate:
                         HandleWheelState(data);
                         break;
-
                     case PacketType.GearChange:
                     case PacketType.EngineStart:
                     case PacketType.EngineStop:
@@ -280,28 +357,24 @@ namespace MWCO.Client.Networking
                     case PacketType.HornTrigger:
                         HandleVehicleEvent(data);
                         break;
-
                     case PacketType.FuelUpdate:
                         HandleVehicleConfig(data);
                         break;
-
                     case PacketType.PartAttach:
                     case PacketType.PartDetach:
                         HandlePartSync(data);
                         break;
-
                     case PacketType.TimeWeatherSync:
                         HandleTimeWeather(data);
                         break;
-
-                    default:
-                        Debug.LogWarning($"[MWCO] Unhandled packet type: {header.PacketType}");
+                    case PacketType.WorldObjectSpawn:
+                        HandleWorldObjectSpawn(data);
                         break;
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[MWCO] Error processing packet: {ex.Message}");
+                LogError($"[MWCO] Error processing packet: {ex.Message}");
             }
         }
 
@@ -310,16 +383,15 @@ namespace MWCO.Client.Networking
             var response = ConnectionResponsePacket.FromBytes(data);
             LocalPlayerId = response.AssignedPlayerId;
             LocalVehicleId = response.AssignedVehicleId;
+            ServerTick = response.Header.Tick;
             IsConnected = true;
 
-            Debug.Log($"[MWCO] Connected! Player ID: {LocalPlayerId}, Vehicle ID: {LocalVehicleId}");
-            Debug.Log($"[MWCO] Server message: {response.Message}");
+            LogInfo($"[MWCO] Connected! Player ID: {LocalPlayerId}, Vehicle ID: {LocalVehicleId}");
 
-            // Initialize local vehicle controller
+            LocalVehicleController.Logger = Logger;
             localVehicleController = gameObject.AddComponent<LocalVehicleController>();
             localVehicleController.Initialize(LocalVehicleId);
 
-            // Initialize local player controller
             localPlayerController = gameObject.AddComponent<PlayerController>();
             localPlayerController.Initialize(playerName);
         }
@@ -327,43 +399,76 @@ namespace MWCO.Client.Networking
         private void HandleConnectionDenied(byte[] data)
         {
             var response = ConnectionResponsePacket.FromBytes(data);
-            Debug.LogError($"[MWCO] Connection denied: {response.Message}");
+            LastError = $"Connection denied: {response.Message}";
+            LogError($"[MWCO] {LastError}");
         }
 
         private void HandleVehicleState(byte[] data)
         {
             var packet = VehicleStatePacket.FromBytes(data);
 
-            // Ignore our own vehicle
             if (packet.VehicleId == LocalVehicleId)
                 return;
 
-            // Update or create remote vehicle
             if (!remoteVehicles.TryGetValue(packet.VehicleId, out var vehicle))
             {
-                Debug.LogWarning($"[MWCO] Received state for unknown vehicle {packet.VehicleId}");
+                SpawnRemoteVehicleFromState(packet);
                 return;
             }
 
             vehicle.UpdateState(packet);
         }
 
+        private void SpawnRemoteVehicleFromState(VehicleStatePacket packet)
+        {
+            try
+            {
+                var parent = GameObject.Find("RemoteVehicles") ?? new GameObject("RemoteVehicles");
+
+                var vehicleObj = new GameObject($"RemoteVehicle_{packet.VehicleId}");
+                vehicleObj.transform.parent = parent.transform;
+                vehicleObj.transform.position = new Vector3(packet.PositionX, packet.PositionY, packet.PositionZ);
+                vehicleObj.transform.rotation = new Quaternion(packet.RotationX, packet.RotationY, packet.RotationZ, packet.RotationW);
+                
+                var remoteVehicle = vehicleObj.AddComponent<RemoteVehicle>();
+                remoteVehicle.InitializeFromState(packet);
+
+                remoteVehicles[packet.VehicleId] = remoteVehicle;
+                LogInfo($"[MWCO] Remote vehicle {packet.VehicleId} spawned");
+            }
+            catch (Exception ex)
+            {
+                LogError($"[MWCO] Failed to spawn vehicle {packet.VehicleId}: {ex.Message}");
+            }
+        }
+
         private void HandleVehicleSpawn(byte[] data)
         {
             var packet = VehicleSpawnPacket.FromBytes(data);
 
-            // Ignore our own vehicle
             if (packet.VehicleId == LocalVehicleId)
                 return;
 
-            Debug.Log($"[MWCO] Spawning remote vehicle {packet.VehicleId} (owner: Player {packet.OwnedByPlayerId})");
+            if (remoteVehicles.ContainsKey(packet.VehicleId))
+                return;
 
-            // Create remote vehicle
-            var vehicleObj = new GameObject($"RemoteVehicle_{packet.VehicleId}");
-            var remoteVehicle = vehicleObj.AddComponent<RemoteVehicle>();
-            remoteVehicle.Initialize(packet);
+            try
+            {
+                var parent = GameObject.Find("RemoteVehicles") ?? new GameObject("RemoteVehicles");
 
-            remoteVehicles[packet.VehicleId] = remoteVehicle;
+                var vehicleObj = new GameObject($"RemoteVehicle_{packet.VehicleId}");
+                vehicleObj.transform.parent = parent.transform;
+                
+                var remoteVehicle = vehicleObj.AddComponent<RemoteVehicle>();
+                remoteVehicle.Initialize(packet);
+
+                remoteVehicles[packet.VehicleId] = remoteVehicle;
+                LogInfo($"[MWCO] Remote vehicle {packet.VehicleId} spawned");
+            }
+            catch (Exception ex)
+            {
+                LogError($"[MWCO] Failed to spawn vehicle {packet.VehicleId}: {ex.Message}");
+            }
         }
 
         private void HandleVehicleDespawn(byte[] data)
@@ -372,9 +477,9 @@ namespace MWCO.Client.Networking
 
             if (remoteVehicles.TryGetValue(packet.VehicleId, out var vehicle))
             {
-                Debug.Log($"[MWCO] Despawning vehicle {packet.VehicleId}");
-                Destroy(vehicle.gameObject);
                 remoteVehicles.Remove(packet.VehicleId);
+                if (vehicle != null && vehicle.gameObject != null)
+                    Destroy(vehicle.gameObject);
             }
         }
 
@@ -383,9 +488,7 @@ namespace MWCO.Client.Networking
             var packet = WheelStatePacket.FromBytes(data);
 
             if (remoteVehicles.TryGetValue(packet.VehicleId, out var vehicle))
-            {
                 vehicle.UpdateWheelState(packet);
-            }
         }
 
         private void HandleVehicleEvent(byte[] data)
@@ -393,9 +496,7 @@ namespace MWCO.Client.Networking
             var packet = VehicleEventPacket.FromBytes(data);
 
             if (remoteVehicles.TryGetValue(packet.VehicleId, out var vehicle))
-            {
                 vehicle.HandleEvent(packet);
-            }
         }
 
         private void HandleVehicleConfig(byte[] data)
@@ -403,9 +504,7 @@ namespace MWCO.Client.Networking
             var packet = VehicleConfigPacket.FromBytes(data);
 
             if (remoteVehicles.TryGetValue(packet.VehicleId, out var vehicle))
-            {
                 vehicle.UpdateConfig(packet);
-            }
         }
 
         private void HandlePartSync(byte[] data)
@@ -413,36 +512,46 @@ namespace MWCO.Client.Networking
             var packet = PartSyncPacket.FromBytes(data);
 
             if (remoteVehicles.TryGetValue(packet.VehicleId, out var vehicle))
-            {
                 vehicle.UpdatePart(packet);
-            }
         }
 
         private void HandleTimeWeather(byte[] data)
         {
             var packet = TimeWeatherPacket.FromBytes(data);
-            // TODO: Update game time and weather
-            Debug.Log($"[MWCO] Time update: {packet.Hour}:{packet.Minute:D2}, Weather: {packet.WeatherType}");
+            // TODO: Sync game time and weather
         }
 
         private void SendHighPriorityUpdates()
         {
             if (localVehicleController != null && localVehicleController.IsReady)
             {
-                // Send input packet
+                var statePacket = localVehicleController.GetStatePacket(currentTick);
+                SendPacket(statePacket.ToBytes());
+
                 var inputPacket = localVehicleController.GetInputPacket(currentTick);
                 SendPacket(inputPacket.ToBytes());
+                
+                var playerPacket = localVehicleController.GetPlayerStatePacket(LocalPlayerId, currentTick);
+                SendPacket(playerPacket.ToBytes());
             }
         }
 
         private void SendMediumPriorityUpdates()
         {
-            // Medium priority updates handled by local vehicle controller
+            if (localVehicleController != null && localVehicleController.IsReady)
+            {
+                var wheelPacket = localVehicleController.GetWheelStatePacket(currentTick);
+                SendPacket(wheelPacket.ToBytes());
+            }
         }
 
         private void SendLowPriorityUpdates()
         {
-            // Low priority updates handled by local vehicle controller
+            if (localVehicleController != null && localVehicleController.IsReady)
+            {
+                var configPacket = localVehicleController.GetConfigPacket(currentTick);
+                SendPacket(configPacket.ToBytes());
+            }
         }
 
         private void SendHeartbeat()
@@ -455,14 +564,12 @@ namespace MWCO.Client.Networking
         {
             var packet = PlayerStatePacket.FromBytes(data);
 
-            // Ignore our own player
             if (packet.PlayerId == LocalPlayerId)
                 return;
 
-            // Update or create remote player
             if (!remotePlayers.TryGetValue(packet.PlayerId, out var player))
             {
-                Debug.LogWarning($"[MWCO] Received state for unknown player {packet.PlayerId}");
+                SpawnRemotePlayerFromState(packet);
                 return;
             }
 
@@ -471,24 +578,44 @@ namespace MWCO.Client.Networking
             player.UpdateState(position, rotation);
         }
 
+        private void SpawnRemotePlayerFromState(PlayerStatePacket packet)
+        {
+            try
+            {
+                Vector3 pos = new Vector3(packet.PositionX, packet.PositionY, packet.PositionZ);
+                LogInfo($"[MWCO] *** SPAWNING REMOTE PLAYER {packet.PlayerId} at {pos} ***");
+                
+                var parent = GameObject.Find("RemotePlayers") ?? new GameObject("RemotePlayers");
+
+                var playerObj = new GameObject($"RemotePlayer_{packet.PlayerId}");
+                playerObj.transform.parent = parent.transform;
+                playerObj.transform.position = pos;
+                playerObj.transform.rotation = new Quaternion(packet.RotationX, packet.RotationY, packet.RotationZ, packet.RotationW);
+                
+                var remotePlayer = playerObj.AddComponent<RemotePlayer>();
+                remotePlayer.Initialize(packet.PlayerId, $"Player{packet.PlayerId}");
+
+                remotePlayers[packet.PlayerId] = remotePlayer;
+                LogInfo($"[MWCO] Remote player {packet.PlayerId} spawned successfully at {pos}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"[MWCO] Failed to spawn player {packet.PlayerId}: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
         private void HandlePlayerSpawn(byte[] data)
         {
             var packet = PlayerSpawnPacket.FromBytes(data);
 
-            // Ignore our own player
             if (packet.PlayerId == LocalPlayerId)
                 return;
 
-            Debug.Log($"[MWCO] Spawning remote player {packet.PlayerId}: {packet.GetPlayerName()}");
-
-            // Create remote player
             var playerObj = new GameObject($"RemotePlayer_{packet.PlayerId}");
             var remotePlayer = playerObj.AddComponent<RemotePlayer>();
             remotePlayer.Initialize(packet.PlayerId, packet.GetPlayerName());
 
-            Vector3 spawnPos = new Vector3(packet.SpawnPositionX, packet.SpawnPositionY, packet.SpawnPositionZ);
-            playerObj.transform.position = spawnPos;
-
+            playerObj.transform.position = new Vector3(packet.SpawnPositionX, packet.SpawnPositionY, packet.SpawnPositionZ);
             remotePlayers[packet.PlayerId] = remotePlayer;
         }
 
@@ -498,9 +625,115 @@ namespace MWCO.Client.Networking
 
             if (remotePlayers.TryGetValue(packet.PlayerId, out var player))
             {
-                Debug.Log($"[MWCO] Despawning player {packet.PlayerId}");
                 Destroy(player.gameObject);
                 remotePlayers.Remove(packet.PlayerId);
+            }
+        }
+        
+        private void LogInfo(string message)
+        {
+            Debug.Log(message);
+            Logger?.LogInfo(message);
+        }
+        
+        private void LogError(string message)
+        {
+            Debug.LogError(message);
+            Logger?.LogError(message);
+        }
+        
+        private void LogWarning(string message)
+        {
+            Debug.LogWarning(message);
+            Logger?.LogWarning(message);
+        }
+
+        // ===== TEST CUBE NETWORKING =====
+        private static uint nextTestCubeId = 1;
+        private Dictionary<uint, GameObject> testCubes = new Dictionary<uint, GameObject>();
+
+        public void SpawnTestCube()
+        {
+            try
+            {
+                // Spawn 1km away from origin, 1km in the sky - impossible to miss!
+                Vector3 spawnPos = new Vector3(1000f, 1000f, 0f);
+                Quaternion spawnRot = Quaternion.identity;
+
+                // Spawn locally first
+                uint cubeId = nextTestCubeId++;
+                SpawnTestCubeLocal(cubeId, spawnPos, spawnRot);
+
+                // Create packet using the constructor properly
+                string name = $"TestCube_{LocalPlayerId}_{cubeId}";
+                var packet = new WorldObjectPacket(cubeId, name, 255, PacketType.WorldObjectSpawn, currentTick)
+                {
+                    PosX = spawnPos.x,
+                    PosY = spawnPos.y,
+                    PosZ = spawnPos.z,
+                    RotX = spawnRot.x,
+                    RotY = spawnRot.y,
+                    RotZ = spawnRot.z,
+                    RotW = spawnRot.w
+                };
+
+                SendPacket(packet.ToBytes());
+                LogInfo($"[MWCO] Sent test cube spawn: {name} at {spawnPos}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"[MWCO] Failed to spawn test cube: {ex.Message}");
+            }
+        }
+
+        private void SpawnTestCubeLocal(uint cubeId, Vector3 position, Quaternion rotation)
+        {
+            // Create primitive cube - 1km x 1km x 1km, impossible to miss!
+            var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cube.name = $"TestCube_{cubeId}";
+            cube.transform.position = position;
+            cube.transform.rotation = rotation;
+            cube.transform.localScale = new Vector3(1000f, 1000f, 1000f);
+
+            // Make it magenta
+            var renderer = cube.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                renderer.material = new Material(Shader.Find("Standard"));
+                renderer.material.color = Color.magenta;
+            }
+
+            // Store reference
+            testCubes[cubeId] = cube;
+            LogInfo($"[MWCO] Spawned test cube {cubeId} at {position}");
+        }
+
+        private void HandleWorldObjectSpawn(byte[] data)
+        {
+            try
+            {
+                var packet = WorldObjectPacket.FromBytes(data);
+                
+                // Only handle test cubes (type 255)
+                if (packet.ObjectType != 255)
+                    return;
+
+                // Don't spawn our own cubes again
+                if (packet.ObjectName.Contains($"_{LocalPlayerId}_"))
+                {
+                    LogInfo($"[MWCO] Ignoring own test cube: {packet.ObjectName}");
+                    return;
+                }
+
+                Vector3 position = new Vector3(packet.PosX, packet.PosY, packet.PosZ);
+                Quaternion rotation = new Quaternion(packet.RotX, packet.RotY, packet.RotZ, packet.RotW);
+
+                SpawnTestCubeLocal(packet.ObjectId, position, rotation);
+                LogInfo($"[MWCO] Received remote test cube: {packet.ObjectName}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"[MWCO] Failed to handle world object spawn: {ex.Message}");
             }
         }
     }

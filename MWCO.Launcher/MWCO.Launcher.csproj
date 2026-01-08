@@ -9,7 +9,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../MWCO.Server/MWCO.Server/MWCO.Server.csproj" />
     <ProjectReference Include="../MWCO.Shared/MWCO.Shared.csproj" />
   </ItemGroup>
 
